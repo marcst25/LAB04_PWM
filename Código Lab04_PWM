@@ -1,0 +1,122 @@
+// Universidad del Valle de Guatemala
+// BE3029 - Electrónica Digital 2
+// Marcela Castañeda - 23717
+// Laboratorio 04 - PWM con ISR y antirrebote
+// MCU: ESP32 dev kit 1.1
+
+//-------------------------------- LIBRERÍAS -------------------------------------//
+#include <Arduino.h>
+#include <stdint.h>
+#include <driver/ledc.h>
+
+// ------------------- DEFINICIONES ------------------- //
+
+// LEDs RGB
+#define LED_R 23
+#define LED_G 22
+#define LED_B 15
+
+// Botones
+#define BTN_SELEC 25
+#define BTN_BRILLO 14
+
+// Canales para PWM
+#define pwmChannel_R 0
+#define pwmChannel_G 1
+#define pwmChannel_B 2
+
+// Configuración de PWM
+#define freqPWM 5000
+#define resPWM 8 // resolución de 8 bits (0-255)
+
+#define TiempoAntirrebote 200 // ms
+
+// ------------------- VARIABLES GLOBALES ------------------- //
+volatile int ledSeleccionado = 0; // 0 = Rojo, 1 = Verde, 2 = Azul
+
+volatile int brilloR = 0;
+volatile int brilloG = 0;
+volatile int brilloB = 0;
+
+// Niveles de brillo
+const int nivelesBrillo[5] = {0, 50, 120, 200, 250};
+
+volatile int indiceBrilloR = 0;
+volatile int indiceBrilloG = 0;
+volatile int indiceBrilloB = 0;
+
+// Variables para el antirrebote
+volatile uint32_t lastISRBTN_SELEC = 0;
+volatile uint32_t lastISRBTN_BRILLO = 0;
+
+// ------------------- ISR ------------------- //
+void IRAM_ATTR BTN_SELEC_ISR(void) {
+  uint32_t tiempoActual1 = millis();
+  if (tiempoActual1 - lastISRBTN_SELEC > TiempoAntirrebote) {
+    ledSeleccionado = (ledSeleccionado + 1) % 3;
+    lastISRBTN_SELEC = tiempoActual1;
+  }
+}
+
+void IRAM_ATTR BTN_BRILLO_ISR(void) {
+  uint32_t tiempoActual2 = millis();
+  if (tiempoActual2 - lastISRBTN_BRILLO > TiempoAntirrebote) {
+    if (ledSeleccionado == 0) {
+      indiceBrilloR = (indiceBrilloR + 1) % 5;
+      brilloR = nivelesBrillo[indiceBrilloR];
+    } else if (ledSeleccionado == 1) {
+      indiceBrilloG = (indiceBrilloG + 1) % 5;
+      brilloG = nivelesBrillo[indiceBrilloG];
+    } else {
+      indiceBrilloB = (indiceBrilloB + 1) % 5;
+      brilloB = nivelesBrillo[indiceBrilloB];
+    }
+
+    // Actualizar PWM
+    ledcWrite(pwmChannel_R, brilloR);
+    ledcWrite(pwmChannel_G, brilloG);
+    ledcWrite(pwmChannel_B, brilloB);
+
+    lastISRBTN_BRILLO = tiempoActual2;
+  }
+}
+
+// ------------------- CONFIGURACIÓN ------------------- //
+void initPWM(void) {
+  // Configurar PWM
+  ledcSetup(pwmChannel_R, freqPWM, resPWM);
+  ledcSetup(pwmChannel_G, freqPWM, resPWM);
+  ledcSetup(pwmChannel_B, freqPWM, resPWM);
+
+  // Asociar pines
+  ledcAttachPin(LED_R, pwmChannel_R);
+  ledcAttachPin(LED_G, pwmChannel_G);
+  ledcAttachPin(LED_B, pwmChannel_B);
+
+  // Inicializar en 0
+  ledcWrite(pwmChannel_R, 0);
+  ledcWrite(pwmChannel_G, 0);
+  ledcWrite(pwmChannel_B, 0);
+}
+
+void initBTN_SELEC(void) {
+  pinMode(BTN_SELEC, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(BTN_SELEC), BTN_SELEC_ISR, FALLING);
+}
+
+void initBTN_BRILLO(void) {
+  pinMode(BTN_BRILLO, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(BTN_BRILLO), BTN_BRILLO_ISR, FALLING);
+}
+
+// ------------------- SETUP Y LOOP ------------------- //
+void setup() {
+  Serial.begin(115200);
+  initPWM();
+  initBTN_SELEC();
+  initBTN_BRILLO();
+}
+
+void loop() {
+  // Todo se maneja desde las ISR
+}
