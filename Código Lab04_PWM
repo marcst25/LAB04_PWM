@@ -1,122 +1,238 @@
-// Universidad del Valle de Guatemala
-// BE3029 - Electrónica Digital 2
+// Universidad del Valle 
 // Marcela Castañeda - 23717
-// Laboratorio 04 - PWM con ISR y antirrebote
-// MCU: ESP32 dev kit 1.1
+// Laboratorio 04 - PWM con ISR y Antirrebote
 
-//-------------------------------- LIBRERÍAS -------------------------------------//
+// --------------- LIBRERÍAS ------------------- // 
+
 #include <Arduino.h>
-#include <stdint.h>
 #include <driver/ledc.h>
 
 // ------------------- DEFINICIONES ------------------- //
-
-// LEDs RGB
+// Leds
 #define LED_R 23
 #define LED_G 22
 #define LED_B 15
 
-// Botones
-#define BTN_SELEC 25
-#define BTN_BRILLO 14
+// Botones para leds
+#define BTN_SELEC     25
+#define BTN_BRILLO    14
 
-// Canales para PWM
-#define pwmChannel_R 0
-#define pwmChannel_G 1
-#define pwmChannel_B 2
+// Botones para el servo
+#define BTN_SERVO_DER 26
+#define BTN_SERVO_IZQ 27
 
-// Configuración de PWM
-#define freqPWM 5000
-#define resPWM 8 // resolución de 8 bits (0-255)
+#define SERVO_PIN 18
 
-#define TiempoAntirrebote 200 // ms
+// Escoger los canales para los leds y para el servo
+#define CH_R 0
+#define CH_G 1
+#define CH_B 2
+#define SERVO_CH 3
+
+// Definir la frecuancia y resolución para LEDs y Servo 
+#define LED_FREQ 5000
+#define LED_RES 8
+#define SERVO_FREQ 50
+#define SERVO_RES 8
+
+#define TiempoAntirrebote 200 
 
 // ------------------- VARIABLES GLOBALES ------------------- //
-volatile int ledSeleccionado = 0; // 0 = Rojo, 1 = Verde, 2 = Azul
+volatile uint32_t ultimoTiempoISR_SELEC     = 0;
+volatile uint32_t ultimoTiempoISR_BRILLO    = 0;
+volatile uint32_t ultimoTiempoISR_SERVO_DER = 0;
+volatile uint32_t ultimoTiempoISR_SERVO_IZQ = 0;
 
-volatile int brilloR = 0;
-volatile int brilloG = 0;
-volatile int brilloB = 0;
+// Iniciar los estados de los botones
+volatile bool seleccionLedPRESSED = false;
+volatile bool cambioBrilloPRESSED = false;
+volatile bool moverServoDerechaPRESSED = false;
+volatile bool moverServoIzquierdaPRESSED = false;
 
-// Niveles de brillo
-const int nivelesBrillo[5] = {0, 50, 120, 200, 250};
+// Escoger las posiciones del servo según el ciclo de trabajo en ms
+volatile int indicePosicion = 2; // inicia en 0°
 
-volatile int indiceBrilloR = 0;
-volatile int indiceBrilloG = 0;
-volatile int indiceBrilloB = 0;
+// Crear arreglo para las posiciones del servo
+float posiciones_ms[] = {0.5, 1.0, 1.5, 2.0, 2.5}; //Posiciones en milisegundos según el ciclo de trabajo
 
-// Variables para el antirrebote
-volatile uint32_t lastISRBTN_SELEC = 0;
-volatile uint32_t lastISRBTN_BRILLO = 0;
+// Crear arreglo para los niveles del brillo 
+const uint8_t nivelesBrillo[5] = {0, 50, 120, 200, 255}; //5 distintos brillos según 8 bits
+volatile uint8_t indiceBrillo = 0;
+
+// Empezar todos los ciclos en 0 
+volatile uint8_t cicloRojo = 0, cicloVerde = 0, cicloAzul = 0;
+volatile uint8_t ledSeleccionado = 255;
+volatile uint8_t modoSeleccion = 0;
 
 // ------------------- ISR ------------------- //
-void IRAM_ATTR BTN_SELEC_ISR(void) {
-  uint32_t tiempoActual1 = millis();
-  if (tiempoActual1 - lastISRBTN_SELEC > TiempoAntirrebote) {
-    ledSeleccionado = (ledSeleccionado + 1) % 3;
-    lastISRBTN_SELEC = tiempoActual1;
+void IRAM_ATTR ISR_SELEC() { //Botón para seleccionar un led
+  uint32_t tiempoactual = millis();
+  if (tiempoactual - ultimoTiempoISR_SELEC > TiempoAntirrebote) {
+    seleccionLedPRESSED = true;
+    ultimoTiempoISR_SELEC = tiempoactual;
   }
 }
 
-void IRAM_ATTR BTN_BRILLO_ISR(void) {
-  uint32_t tiempoActual2 = millis();
-  if (tiempoActual2 - lastISRBTN_BRILLO > TiempoAntirrebote) {
-    if (ledSeleccionado == 0) {
-      indiceBrilloR = (indiceBrilloR + 1) % 5;
-      brilloR = nivelesBrillo[indiceBrilloR];
-    } else if (ledSeleccionado == 1) {
-      indiceBrilloG = (indiceBrilloG + 1) % 5;
-      brilloG = nivelesBrillo[indiceBrilloG];
-    } else {
-      indiceBrilloB = (indiceBrilloB + 1) % 5;
-      brilloB = nivelesBrillo[indiceBrilloB];
-    }
-
-    // Actualizar PWM
-    ledcWrite(pwmChannel_R, brilloR);
-    ledcWrite(pwmChannel_G, brilloG);
-    ledcWrite(pwmChannel_B, brilloB);
-
-    lastISRBTN_BRILLO = tiempoActual2;
+void IRAM_ATTR ISR_BRILLO() { //Botón para cambiar el brillo de la led
+  uint32_t tiempoactual = millis(); 
+  if (tiempoactual - ultimoTiempoISR_BRILLO > TiempoAntirrebote) {
+    cambioBrilloPRESSED = true;
+    ultimoTiempoISR_BRILLO = tiempoactual;
   }
 }
 
-// ------------------- CONFIGURACIÓN ------------------- //
-void initPWM(void) {
-  // Configurar PWM
-  ledcSetup(pwmChannel_R, freqPWM, resPWM);
-  ledcSetup(pwmChannel_G, freqPWM, resPWM);
-  ledcSetup(pwmChannel_B, freqPWM, resPWM);
-
-  // Asociar pines
-  ledcAttachPin(LED_R, pwmChannel_R);
-  ledcAttachPin(LED_G, pwmChannel_G);
-  ledcAttachPin(LED_B, pwmChannel_B);
-
-  // Inicializar en 0
-  ledcWrite(pwmChannel_R, 0);
-  ledcWrite(pwmChannel_G, 0);
-  ledcWrite(pwmChannel_B, 0);
+void IRAM_ATTR ISR_SERVO_DER() { //Botón para mover el servo a la derecha
+  uint32_t tiempoactual = millis();
+  if (tiempoactual - ultimoTiempoISR_SERVO_DER > TiempoAntirrebote) {
+    moverServoDerechaPRESSED = true;
+    ultimoTiempoISR_SERVO_DER = tiempoactual;
+  }
 }
 
-void initBTN_SELEC(void) {
-  pinMode(BTN_SELEC, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(BTN_SELEC), BTN_SELEC_ISR, FALLING);
+void IRAM_ATTR ISR_SERVO_IZQ() { //Botón para mover el servo a la izquierda
+  uint32_t tiempoactual = millis();
+  if (tiempoactual - ultimoTiempoISR_SERVO_IZQ > TiempoAntirrebote) {
+    moverServoIzquierdaPRESSED = true;
+    ultimoTiempoISR_SERVO_IZQ = tiempoactual;
+  }
 }
 
-void initBTN_BRILLO(void) {
-  pinMode(BTN_BRILLO, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(BTN_BRILLO), BTN_BRILLO_ISR, FALLING);
-}
+// ------------------- PROTOTIPOS DE FUNCIONES ------------------- //
+void actualizarServo();
+void actualizarLED();
 
-// ------------------- SETUP Y LOOP ------------------- //
+// ------------------- Setup ------------------- //
 void setup() {
   Serial.begin(115200);
-  initPWM();
-  initBTN_SELEC();
-  initBTN_BRILLO();
+
+  // LEDs
+  ledcSetup(CH_R, LED_FREQ, LED_RES);
+  ledcSetup(CH_G, LED_FREQ, LED_RES);
+  ledcSetup(CH_B, LED_FREQ, LED_RES);
+
+
+  ledcAttachPin(LED_R, CH_R);
+  ledcAttachPin(LED_G, CH_G);
+  ledcAttachPin(LED_B, CH_B);
+
+
+  ledcWrite(CH_R, 0);
+  ledcWrite(CH_G, 0);
+  ledcWrite(CH_B, 0);
+
+  // Servo
+  ledcSetup(SERVO_CH, SERVO_FREQ, SERVO_RES);
+  ledcAttachPin(SERVO_PIN, SERVO_CH);
+  actualizarServo();
+
+  // Botones
+  // Todos se colocan en faling porque están commo input pull-up
+  pinMode(BTN_SELEC, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(BTN_SELEC), ISR_SELEC, FALLING);
+
+  pinMode(BTN_BRILLO, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(BTN_BRILLO), ISR_BRILLO, FALLING);
+
+  pinMode(BTN_SERVO_DER, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(BTN_SERVO_DER), ISR_SERVO_DER, FALLING);
+
+  pinMode(BTN_SERVO_IZQ, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(BTN_SERVO_IZQ), ISR_SERVO_IZQ, FALLING);
 }
 
+// ------------------- Loop ------------------- //
 void loop() {
-  // Todo se maneja desde las ISR
+  // Mover servo
+  if(moverServoDerechaPRESSED){  //Se mueve el servo hacia la derecha
+    if(indicePosicion < 4) indicePosicion++; //Actualizar el índice de la posición
+    actualizarServo(); 
+    moverServoDerechaPRESSED = false; 
+    if(modoSeleccion == 3) actualizarLED();// llamar a la función para cambiar la led según la posición
+  }
+  if(moverServoIzquierdaPRESSED){ 
+    if(indicePosicion > 0) indicePosicion--; 
+    actualizarServo(); 
+    moverServoIzquierdaPRESSED = false; 
+    if(modoSeleccion == 3) actualizarLED();
+  }
+
+  // Cambiar modo
+  if(seleccionLedPRESSED){
+    modoSeleccion = (modoSeleccion + 1) % 4; //Ciclar entre los 4 modos de Led
+    if(modoSeleccion == 3){
+      indiceBrillo = 2; //Encender la led con un brillo intermedio 
+      actualizarLED();
+    } else {
+      ledSeleccionado = modoSeleccion;
+    }
+    seleccionLedPRESSED = false;
+  }
+
+  // Cambiar brillo
+  if(cambioBrilloPRESSED){
+    if(modoSeleccion == 3){
+      if(ledSeleccionado != 255){
+        indiceBrillo = (indiceBrillo + 1) % 5;
+        actualizarLED();
+      }
+    } else {
+      indiceBrillo = (indiceBrillo + 1) % 5;
+      //Actualizar el ciclo de la led correspondiente
+      switch(modoSeleccion){
+        case 0: cicloRojo  = nivelesBrillo[indiceBrillo]; 
+        break;
+        case 1: cicloVerde = nivelesBrillo[indiceBrillo]; 
+        break;
+        case 2: cicloAzul  = nivelesBrillo[indiceBrillo]; 
+        break;
+      }
+    }
+    cambioBrilloPRESSED = false;
+  }
+
+  // Apagar LEDs si estamos en extremos y en modo servo
+  if(modoSeleccion == 3 && (indicePosicion == 0 || indicePosicion == 4)){ 
+    cicloRojo = cicloVerde = cicloAzul = 0; 
+  }
+
+  // Actualizar LEDs
+  ledcWrite(CH_R, cicloRojo);
+  ledcWrite(CH_G, cicloVerde);
+  ledcWrite(CH_B, cicloAzul);
+
+  delay(1);
+}
+
+
+// ------------------- DEFINICIÓN DE FUNCIONES------------------- //
+// Función para mover el servo y encender la led
+void actualizarServo(){
+  int cicloServo = (posiciones_ms[indicePosicion] / 20.0) * (1 << SERVO_RES); //Divide la posición en 20 ms del periodo 
+  //y se calcula el duty cycle con resolución de 8 bits 
+  ledcWrite(SERVO_CH, cicloServo);
+}
+
+// Función para encender la led según la posición del servo
+void actualizarLED() {
+  switch(indicePosicion) {
+    case 1: // -45°
+      ledSeleccionado = 0; // rojo
+      cicloRojo = nivelesBrillo[indiceBrillo];
+      cicloVerde = cicloAzul = 0;
+      break;
+    case 2: // 0°
+      ledSeleccionado = 1; // verde
+      cicloVerde = nivelesBrillo[indiceBrillo];
+      cicloRojo = cicloAzul = 0;
+      break;
+    case 3: // 45°
+      ledSeleccionado = 2; // azul
+      cicloAzul = nivelesBrillo[indiceBrillo];
+      cicloRojo = cicloVerde = 0;
+      break;
+    default: // extremos -90° o 90°
+      ledSeleccionado = 255; // ninguna led encendida
+      cicloRojo = cicloVerde = cicloAzul = 0;
+      break;
+  }
 }
